@@ -1,0 +1,57 @@
+#!/usr/bin/env bpftrace
+/*
+ * biolatency.bt	Block I/O latency as a histogram.
+ *			For Linux, uses bpftrace, eBPF.
+ *
+ * This is a bpftrace version of the bcc tool of the same name.
+ *
+ * Copyright 2018 Netflix, Inc.
+ * Licensed under the Apache License, Version 2.0 (the "License")
+ *
+ * 13-Sep-2018	Brendan Gregg	Created this.
+ */
+
+BEGIN
+{
+	printf("Tracing block device I/O... Hit Ctrl-C to end.\n");
+}
+
+tracepoint:syscalls:sys_enter_write { @in_write[pid] = 1; }
+tracepoint:syscalls:sys_exit_write { @in_write[pid] = 0; }
+
+//tracepoint:block:block_bio_queue
+tracepoint:block:block_dirty_buffer
+/@in_write[pid]/
+{
+	// @start[args.sector] = nsecs;
+    print(kstack);
+    printf("dirty %d, %d, %lu\n", args.dev >> 20, args.dev - (args.dev >> 20 << 20), args.sector);
+    @start[args.dev] = nsecs;
+    //@trace[args.dev, args.sector] = ustack;
+    //@in_write[pid] = 0;
+}
+
+tracepoint:block:block_bio_queue
+/@start[args.dev]/
+{
+	print(kstack);
+    printf("subio %d, %d, %lu\n", args.dev >> 20, args.dev - (args.dev >> 20 << 20), args.sector);
+}
+
+tracepoint:block:block_rq_complete,
+tracepoint:block:block_bio_complete
+/@start[args.dev]/
+{
+    print(kstack);
+    printf("compl %d, %d, %lu\n", args.dev >> 20, args.dev - (args.dev >> 20 << 20), args.sector);
+    @ts[args.dev] += (nsecs - @start[args.dev]) / 1000;
+	delete(@start[args.dev]);
+    //delete(@trace[args.dev, args.sector]);
+}
+
+END
+{
+	clear(@start);
+    //clear(@trace);
+    clear(@in_write);
+}
